@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<pkg-info overwrite-permissions="true" relocatable="false" identifier="{PACKAGE_ID}" postinstall-action="none" version="{PACKAGE_VERSION}" format-version="2" generator-version="Luggage Flat File" install-location="/" auth="root">
+    <payload numberOfFiles="{NUMBER_FILES}" installKBytes="{INSTALL_KBYTES}"/>
+    <bundle-version/>
+    <upgrade-bundle/>
+    <update-bundle/>
+    <atomic-update-bundle/>
+    <strict-identifier/>
+    <relocate/>
+    <scripts>
+        {PREINSTALL}
+        {POSTINSTALL}
+    </scripts>
+</pkg-info>

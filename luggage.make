@@ -17,7 +17,11 @@ STAMP:=$(shell date +%Y%m%d)
 YY:=$(shell date +%Y)
 MM:=$(shell date +%m)
 DD:=$(shell date +%d)
-BUILD_DATE=$(shell date -u "+%Y-%m-%dT%H:%M:%SZ")
+BUILD_DATE:=$(shell date -u "+%Y-%m-%dT%H:%M:%SZ")
+
+# Are we on Darwin?
+# DARWIN:=$(shell uname -s | grep -q Darwin && echo true || echo false)
+DARWIN:=false
 
 # mai plist haz a flavor
 PLIST_FLAVOR=plist
@@ -26,6 +30,8 @@ PACKAGE_PLIST=.package.plist
 PACKAGE_TARGET_OS=10.4
 PLIST_TEMPLATE=prototype.plist
 PLIST_PATH=/usr/local/share/luggage/prototype.plist
+# PKGINFO_PATH=/usr/local/share/luggage/PackageInfo.proto
+PKGINFO_PATH=./PackageInfo.proto
 TITLE=CHANGE_ME
 REVERSE_DOMAIN=com.replaceme
 PACKAGE_ID=${REVERSE_DOMAIN}.${TITLE}
@@ -55,6 +61,12 @@ PKGBUILD=/usr/bin/pkgbuild
 # Optionally, build packages with packagemaker, set USE_PKGBUILD=0
 PACKAGEMAKER=/usr/local/bin/packagemaker
 
+# When building flat-file pkgs on non-OSX platforms
+MKBOM=/usr/bin/mkbom
+DUMPBOM=/usr/bin/dumpbom
+LSBOM=/usr/bin/lsbom
+LS4MKBOM=/usr/bin/ls4mkbom
+XAR=/usr/bin/xar
 
 # Must be on an HFS+ filesystem. Yes, I know some network servers will do
 # their best to preserve the resource forks, but it isn't worth the aggravation
@@ -67,6 +79,7 @@ RESOURCE_D=${SCRATCH_D}/resources
 EN_LPROJ_D=${RESOURCE_D}/en.lproj
 WORK_D=${SCRATCH_D}/root
 PAYLOAD_D=${SCRATCH_D}/payload
+FLAT_D=${SCRATCH_D}/flat
 
 # packagemaker parameters
 #
@@ -79,7 +92,7 @@ PAYLOAD_D=${SCRATCH_D}/payload
 PM_EXTRA_ARGS=--verbose --no-recommend --no-relocate
 PM_FILTER=--filter "/CVS$$" --filter "/\.svn$$" --filter "/\.cvsignore$$" --filter "/\.cvspass$$" --filter "/(\._)?\.DS_Store$$" --filter "/\.git$$" --filter "/\.gitignore$$"
 
-# package build parameters
+# pkgbuild parameters
 #
 # just like packagemaker, pkgbuild munges permissions unless you tell it not to.
 
@@ -87,7 +100,6 @@ PB_EXTRA_ARGS=--ownership preserve --quiet
 
 
 # pkgbuild can build payload free packages, but you have to say if you want one.
-
 ifeq (${NO_PAYLOAD}, 1)
 PB_EXTRA_ARGS+=" --nopayload"
 endif
@@ -170,6 +182,12 @@ payload_d:
 package_root:
 	@sudo mkdir -p ${WORK_D}
 
+ifeq (${DARWIN}, false)
+flat_d:
+	@sudo mkdir -p ${FLAT_D}/${PACKAGE_FILE}
+endif
+
+
 # packagemaker chokes if the pkg doesn't contain any payload, making script-only
 # packages fail to build mysteriously if you don't remember to include something
 # in it, so we're including the /usr/local directory, since it's harmless.
@@ -204,6 +222,7 @@ clean:
 superclean:
 	@sudo rm -fr ${LUGGAGE_TMP}
 
+ifeq (${DARWIN}, true)
 dmg: scratchdir compile_package
 	@echo "Wrapping ${PACKAGE_NAME}..."
 	@sudo hdiutil create -volname ${PACKAGE_NAME} \
@@ -212,6 +231,17 @@ dmg: scratchdir compile_package
 		-ov \
 		-format ${DMG_FORMAT} \
 		${DMG_NAME}
+else
+dmg:
+	@echo ""
+	@echo "******************************************************************"
+	@echo ""
+	@echo "dmg is only possible on OS X/Darwin."
+	@echo ""
+	@echo "******************************************************************"
+	@echo ""
+	@false
+endif
 
 zip: scratchdir compile_package
 	@echo "Zipping ${PACKAGE_NAME}..."
@@ -248,6 +278,22 @@ payload: payload_d package_root scratchdir scriptdir resourcedir
 	make -f $(word 1,$(MAKEFILE_LIST)) -e ${PAYLOAD}
 	@-echo
 
+flat_bom:
+	@echo "Creating flat-file Bom"
+	sudo $(MKBOM) -u 0 -g 80 $(WORK_D) $(FLAT_D)/$(PACKAGE_FILE)/Bom
+
+flat_payload: payload
+	@echo "Creating flat-file Payload"
+	sudo bash -c '(cd ${WORK_D} && \
+		find . | \
+		cpio -o --format odc --owner 0:80 | \
+		sudo gzip -c) > $(FLAT_D)/$(PACKAGE_FILE)/Payload'
+
+flat_scripts:
+	@echo "Creating flat-file Scripts"
+	[ -z $(shell find $(SCRIPT_D) -mindepth 1 -print -quit) ] || \
+		@sudo $(CP) -R $(SCRIPT_D) $(FLAT_D)/$(PACKAGE_FILE)/Scripts
+
 compile_package_pm: payload .luggage.pkg.plist modify_packageroot
 	@-sudo rm -fr ${PAYLOAD_D}/${PACKAGE_FILE}
 	@echo "Creating ${PAYLOAD_D}/${PACKAGE_FILE} with ${PACKAGEMAKER}"
@@ -274,10 +320,26 @@ compile_package_pb: payload .luggage.pkg.component.plist modify_packageroot
 		${PB_EXTRA_ARGS} \
 		${PAYLOAD_D}/${PACKAGE_FILE}
 
+compile_package_unix: payload flat_d flat_payload flat_bom flat_pkginfo flat_scripts
+	@-sudo rm -fr ${PAYLOAD_D}/${PACKAGE_FILE}
+	@echo "Creating ${PAYLOAD_D}/${PACKAGE_FILE} with bomutils/xar."
+	@echo "SCRATCH_D: $(SCRATCH_D)"
+	@echo "FLAT_D: $(FLAT_D)"
+	@echo "WORK_D: $(WORK_D)"
+	@echo "SCRIPT_D: $(SCRIPT_D)"
+	@echo "RESOURCE_D: $(RESOURCE_D)"
+	@echo "PAYLOAD_D/PACKAGE_FILE: ${PAYLOAD_D}/${PACKAGE_FILE}"
+	sudo bash -c '(cd ${FLAT_D}/${PACKAGE_FILE} && \
+		xar --compression none -cf "${PAYLOAD_D}/${PACKAGE_FILE}" * )'
+
+ifeq (${DARWIN}, false)
+compile_package: compile_package_unix ;
+else
 ifeq (${USE_PKGBUILD}, 0)
 compile_package: compile_package_pm ;
 else
 compile_package: compile_package_pb ;
+endif
 endif
 
 ${PACKAGE_PLIST}: ${PLIST_PATH}
@@ -323,6 +385,30 @@ ${PACKAGE_PLIST}: ${PLIST_PATH}
 		(( index = index + 1 ));\
 		[[ $$success -eq 0 ]] || break;\
 	done; fi
+
+flat_pkginfo:
+	@$(CP) $(PKGINFO_PATH) .PackageInfo
+	sed -i "" "s/{PACKAGE_VERSION}/$(PACKAGE_VERSION)/g" .PackageInfo
+	sed -i "" "s/{PACKAGE_VERSION}/$(PACKAGE_VERSION)/g" .PackageInfo
+
+	$(eval NUMBER_FILES := $(shell find /tmp/the_luggage/luggage-20141217/root | wc -l | tr -d ' '))
+	sed -i "" "s/{NUMBER_FILES}/$(NUMBER_FILES)/g" .PackageInfo
+
+	$(eval INSTALL_KBYTES := $(shell du -sk /tmp/the_luggage/luggage-20141217/root | cut -f 1))
+	sed -i "" "s/{INSTALL_KBYTES}/$(INSTALL_KBYTES)/g" .PackageInfo
+
+	[ -f $(SCRIPT_D)/preinstall ] && \
+		sed -i "" "s^{PREINSTALL}^<preinstall file="./preinstall"/>^g" .PackageInfo \
+		|| \
+		sed -i "" "s^{PREINSTALL}^^g" .PackageInfo
+
+	[ -f $(SCRIPT_D)/postinstall ] && \
+		sed -i "" "s^{POSTINSTALL}^<postinstall file="./postinstall"/>^g" .PackageInfo \
+		|| \
+		sed -i "" "s^{POSTINSTALL}^^g" .PackageInfo
+
+	@sudo $(CP) .PackageInfo $(FLAT_D)/$(PACKAGE_FILE)/PackageInfo
+	@rm .PackageInfo
 
 local_pkg:
 	@${CP} -R ${PAYLOAD_D}/${PACKAGE_FILE} .
